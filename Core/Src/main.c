@@ -75,15 +75,19 @@ static void MX_FDCAN1_Init(void);
 static void MX_WWDG_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART2_UART_Init(void);
+
+static uint32_t lastSend = 0;
 /* USER CODE BEGIN PFP */
 void sendSPIMessage(uint8_t code);
 FDCAN_TxHeaderTypeDef TxHeader;
 uint8_t dummyData[1] = {0x00};
+HAL_StatusTypeDef txResult;
 
 
 FDCAN_RxHeaderTypeDef RxHeader;
 uint8_t RxData[8];
 extern SPI_HandleTypeDef hspi1;
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -140,8 +144,8 @@ int main(void)
   MX_SPI1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  //HAL_FDCAN_Start(&hfdcan1);
-  //HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+  HAL_FDCAN_Start(&hfdcan1);
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
   lastCANMessageTick = HAL_GetTick();
   printf("USART2 printf redirect working!\r\n");
 
@@ -151,7 +155,18 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, dummyData);
+	  //HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, dummyData);
+	  if (HAL_GetTick() - lastSend > 100) { // every 100 ms
+		  txResult = HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, dummyData);
+	      if (txResult == HAL_OK) {
+	          //printf("TX success\r\n");
+	      }
+	      else{
+	    	  printf("TX failed with code %d\r\n", txResult);
+	      }
+	      lastSend = HAL_GetTick();
+	  }
+
 	  //uint8_t msg[] = "Raw UART test\r\n";
 	  //HAL_UART_Transmit(&huart2, msg, sizeof(msg) - 1, HAL_MAX_DELAY);
 	  /*
@@ -163,7 +178,7 @@ int main(void)
 	  uint32_t currentTick = HAL_GetTick();
 	  uint32_t psr = hfdcan1.Instance->PSR;
 	  uint8_t lec = psr & 0x7;
-	  printf("LEC: 0x%02X\r\n", lec);
+	  //printf("LEC: 0x%02X\r\n", lec);
 	  if ((currentTick - lastCANMessageTick) > CAN_TIMEOUT_MS){
 	          //printf("CAN timeout occurred!\n");
 	          HAL_GPIO_WritePin(GPIOA,PIN3_Pin,GPIO_PIN_SET);
@@ -189,12 +204,12 @@ int main(void)
 	  switch(lec){
 	  	  case 0x1:
 	  		  printf("Stuff error\n");
-	  		  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET);
+	  		  //HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET);
 	  		  sendSPIMessage(FAULT_STUFF_ERROR);
 	  		  break;
 	  	  case 0x2:
 	  		  printf("Form error\n");
-	  		  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET);
+	  		 // HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET);
 	  		  sendSPIMessage(FAULT_FORM_ERROR);
 	  		  break;
 	  	  case 0x3:
@@ -455,9 +470,19 @@ void sendSPIMessage(uint8_t code) {
 }
 
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
-    HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &RxHeader, RxData);
-    lastCANMessageTick = HAL_GetTick();
-    canMessageCount++;
+	if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != 0) {
+	        HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &RxHeader, RxData);
+	        lastCANMessageTick = HAL_GetTick();  // optional
+
+	        printf("CAN RX: ID=0x%03lX, DLC=%lu, Data=", RxHeader.Identifier, (RxHeader.DataLength >> 16));
+	        for (int i = 0; i < (RxHeader.DataLength >> 16); i++) {
+	            //printf("%02X ", RxData[i]);
+	        	break;
+	        }
+	        printf("\r\n");
+
+	        canMessageCount++; // optional
+	    }
 }
 
 int __io_putchar(int ch) {
