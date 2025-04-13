@@ -32,9 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-FDCAN_RxHeaderTypeDef RxHeader;
-uint8_t RxData[8];
-extern SPI_HandleTypeDef hspi1;
+
 
 #define FAULT_ACK_ERROR        0xA1
 #define FAULT_STUFF_ERROR      0xA2
@@ -56,6 +54,8 @@ FDCAN_HandleTypeDef hfdcan1;
 
 SPI_HandleTypeDef hspi1;
 
+UART_HandleTypeDef huart2;
+
 WWDG_HandleTypeDef hwwdg;
 
 /* USER CODE BEGIN PV */
@@ -63,7 +63,7 @@ volatile uint32_t lastCANMessageTick = 0;
 volatile uint32_t canMessageCount = 0;
 volatile uint32_t lastRateCheckTick = 0;
 
-const uint32_t CAN_TIMEOUT_MS = 1000;
+const uint32_t CAN_TIMEOUT_MS = 5000;
 const uint32_t MAX_EXPECTED_MSGS = 300;
 const uint32_t RATE_CHECK_WINDOW_MS = 1000;
 /* USER CODE END PV */
@@ -74,9 +74,16 @@ static void MX_GPIO_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_WWDG_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void sendSPIMessage(uint8_t code);
+FDCAN_TxHeaderTypeDef TxHeader;
+uint8_t dummyData[1] = {0x00};
 
+
+FDCAN_RxHeaderTypeDef RxHeader;
+uint8_t RxData[8];
+extern SPI_HandleTypeDef hspi1;
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -109,19 +116,34 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  MX_FDCAN1_Init();
-  HAL_FDCAN_Start(&hfdcan1);
-  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
-  lastCANMessageTick = HAL_GetTick();
+
+
+
+
+  TxHeader.Identifier = 0x123;
+  TxHeader.IdType = FDCAN_STANDARD_ID;
+  TxHeader.TxFrameType = FDCAN_DATA_FRAME;
+  TxHeader.DataLength = FDCAN_DLC_BYTES_1;
+  TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+  TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
+  TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
+  TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+  TxHeader.MessageMarker = 0;
 
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_FDCAN1_Init();
-  MX_WWDG_Init();
+
+  //MX_WWDG_Init();
   MX_SPI1_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  //HAL_FDCAN_Start(&hfdcan1);
+  //HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+  lastCANMessageTick = HAL_GetTick();
+  printf("USART2 printf redirect working!\r\n");
 
   /* USER CODE END 2 */
 
@@ -129,25 +151,36 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, dummyData);
+	  //uint8_t msg[] = "Raw UART test\r\n";
+	  //HAL_UART_Transmit(&huart2, msg, sizeof(msg) - 1, HAL_MAX_DELAY);
+	  /*
+	  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET);
+	  HAL_Delay(500);
+	  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);
+	  HAL_Delay(500);
+	  */
 	  uint32_t currentTick = HAL_GetTick();
 	  uint32_t psr = hfdcan1.Instance->PSR;
 	  uint8_t lec = psr & 0x7;
+	  printf("LEC: 0x%02X\r\n", lec);
 	  if ((currentTick - lastCANMessageTick) > CAN_TIMEOUT_MS){
-	          printf("CAN timeout occurred!\n");
-	          HAL_GPIO_WritePin(GPIOA,PIN3_Pin,GPIO_PIN_RESET);
+	          //printf("CAN timeout occurred!\n");
+	          HAL_GPIO_WritePin(GPIOA,PIN3_Pin,GPIO_PIN_SET);
 	          sendSPIMessage(FAULT_CAN_TIMEOUT);
 	          // Optional: Reset system
 	          ///NVIC_SystemReset();
 	  }
 	  if ((hfdcan1.Instance->PSR & FDCAN_PSR_BO) != 0){
 	  	    // Bus Off = severe fault (e.g., shorted lines)
-	  	    HAL_GPIO_WritePin(GPIOA, PIN3_Pin, GPIO_PIN_RESET); // Indicate fault
+	  	    HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET); // Indicate fault
 	  	    sendSPIMessage(FAULT_BUS_OFF);
+	  	    printf("short!!!");
 	  }
 	  if ((currentTick - lastRateCheckTick) > RATE_CHECK_WINDOW_MS) {
 	      if (canMessageCount > MAX_EXPECTED_MSGS) {
 	          printf("Blabbering idiot fault detected!\n");
-	          HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);
+	          HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET);
 	          sendSPIMessage(FAULT_ACK_ERROR);
 	      }
 	      canMessageCount = 0;
@@ -156,21 +189,21 @@ int main(void)
 	  switch(lec){
 	  	  case 0x1:
 	  		  printf("Stuff error\n");
-	  		  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);
+	  		  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET);
 	  		  sendSPIMessage(FAULT_STUFF_ERROR);
 	  		  break;
 	  	  case 0x2:
 	  		  printf("Form error\n");
-	  		  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);
+	  		  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_SET);
 	  		  sendSPIMessage(FAULT_FORM_ERROR);
 	  		  break;
 	  	  case 0x3:
 	  		  printf("ACK error (likely no other node)\n");
-	  		  HAL_GPIO_WritePin(GPIOA, PIN8_Pin, GPIO_PIN_RESET);
+	  		  HAL_GPIO_WritePin(GPIOA, PIN8_Pin, GPIO_PIN_SET);
 	  		  sendSPIMessage(FAULT_ACK_ERROR);
 	  		  break;
 	  }
-	  lastCANMessageTick = currentTick;
+	  HAL_Delay(5);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -241,12 +274,12 @@ static void MX_FDCAN1_Init(void)
   /* USER CODE END FDCAN1_Init 1 */
   hfdcan1.Instance = FDCAN1;
   hfdcan1.Init.ClockDivider = FDCAN_CLOCK_DIV1;
-  hfdcan1.Init.FrameFormat = FDCAN_FRAME_FD_NO_BRS;
+  hfdcan1.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
   hfdcan1.Init.Mode = FDCAN_MODE_NORMAL;
   hfdcan1.Init.AutoRetransmission = DISABLE;
   hfdcan1.Init.TransmitPause = DISABLE;
   hfdcan1.Init.ProtocolException = DISABLE;
-  hfdcan1.Init.NominalPrescaler = 5;
+  hfdcan1.Init.NominalPrescaler = 10;
   hfdcan1.Init.NominalSyncJumpWidth = 1;
   hfdcan1.Init.NominalTimeSeg1 = 13;
   hfdcan1.Init.NominalTimeSeg2 = 2;
@@ -254,7 +287,7 @@ static void MX_FDCAN1_Init(void)
   hfdcan1.Init.DataSyncJumpWidth = 1;
   hfdcan1.Init.DataTimeSeg1 = 1;
   hfdcan1.Init.DataTimeSeg2 = 1;
-  hfdcan1.Init.StdFiltersNbr = 0x000;
+  hfdcan1.Init.StdFiltersNbr = 0;
   hfdcan1.Init.ExtFiltersNbr = 0;
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
@@ -308,6 +341,55 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART2_Init 0 */
+printf("Hello from STM32!\r\n");
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart2, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart2, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
   * @brief WWDG Initialization Function
   * @param None
   * @retval None
@@ -353,16 +435,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(PIN7_GPIO_Port, PIN7_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, PIN8_Pin|PIN3_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOA, PIN7_Pin|PIN8_Pin|PIN3_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PIN7_Pin PIN8_Pin PIN3_Pin */
   GPIO_InitStruct.Pin = PIN7_Pin|PIN8_Pin|PIN3_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
@@ -374,6 +453,19 @@ static void MX_GPIO_Init(void)
 void sendSPIMessage(uint8_t code) {
     HAL_SPI_Transmit(&hspi1, &code, 1, HAL_MAX_DELAY);
 }
+
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
+    HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &RxHeader, RxData);
+    lastCANMessageTick = HAL_GetTick();
+    canMessageCount++;
+}
+
+int __io_putchar(int ch) {
+    HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
+    return ch;
+}
+
+
 /* USER CODE END 4 */
 
 /**
