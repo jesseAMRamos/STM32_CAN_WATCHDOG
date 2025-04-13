@@ -36,6 +36,14 @@ FDCAN_RxHeaderTypeDef RxHeader;
 uint8_t RxData[8];
 extern SPI_HandleTypeDef hspi1;
 
+#define FAULT_ACK_ERROR        0xA1
+#define FAULT_STUFF_ERROR      0xA2
+#define FAULT_FORM_ERROR       0xA3
+#define FAULT_CAN_TIMEOUT      0xA4
+#define FAULT_BUS_OFF          0xA5
+#define FAULT_BLABBERING_IDIOT 0xA6
+
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -67,6 +75,7 @@ static void MX_FDCAN1_Init(void);
 static void MX_WWDG_Init(void);
 static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
+void sendSPIMessage(uint8_t code);
 
 /* USER CODE END PFP */
 
@@ -126,25 +135,40 @@ int main(void)
 	  if ((currentTick - lastCANMessageTick) > CAN_TIMEOUT_MS){
 	          printf("CAN timeout occurred!\n");
 	          HAL_GPIO_WritePin(GPIOA,PIN3_Pin,GPIO_PIN_RESET);
+	          sendSPIMessage(FAULT_CAN_TIMEOUT);
 	          // Optional: Reset system
 	          ///NVIC_SystemReset();
 	  }
 	  if ((hfdcan1.Instance->PSR & FDCAN_PSR_BO) != 0){
 	  	    // Bus Off = severe fault (e.g., shorted lines)
 	  	    HAL_GPIO_WritePin(GPIOA, PIN3_Pin, GPIO_PIN_RESET); // Indicate fault
+	  	    sendSPIMessage(FAULT_BUS_OFF);
 	  }
 	  if ((currentTick - lastRateCheckTick) > RATE_CHECK_WINDOW_MS) {
 	      if (canMessageCount > MAX_EXPECTED_MSGS) {
 	          printf("Blabbering idiot fault detected!\n");
 	          HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);
+	          sendSPIMessage(FAULT_ACK_ERROR);
 	      }
 	      canMessageCount = 0;
 	      lastRateCheckTick = currentTick;
 	  }
 	  switch(lec){
-	  	  case 0x1: printf("Stuff error\n"); HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);break;
-	  	  case 0x2: printf("Form error\n"); HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);break;
-	  	  case 0x3: printf("ACK error (likely no other node)\n"); HAL_GPIO_WritePin(GPIOA, PIN8_Pin, GPIO_PIN_RESET);break;
+	  	  case 0x1:
+	  		  printf("Stuff error\n");
+	  		  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);
+	  		  sendSPIMessage(FAULT_STUFF_ERROR);
+	  		  break;
+	  	  case 0x2:
+	  		  printf("Form error\n");
+	  		  HAL_GPIO_WritePin(GPIOA, PIN7_Pin, GPIO_PIN_RESET);
+	  		  sendSPIMessage(FAULT_FORM_ERROR);
+	  		  break;
+	  	  case 0x3:
+	  		  printf("ACK error (likely no other node)\n");
+	  		  HAL_GPIO_WritePin(GPIOA, PIN8_Pin, GPIO_PIN_RESET);
+	  		  sendSPIMessage(FAULT_ACK_ERROR);
+	  		  break;
 	  }
 	  lastCANMessageTick = currentTick;
     /* USER CODE END WHILE */
